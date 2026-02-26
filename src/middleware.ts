@@ -1,9 +1,6 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import {
-  verifyAccessToken,
-  verifyAccessTokenDetailed,
-} from "@/lib/tokens";
+import { verifyAccessToken, verifyAccessTokenDetailed } from "@/lib/tokens";
 import {
   ACCESS_TOKEN_COOKIE,
   REFRESH_TOKEN_COOKIE,

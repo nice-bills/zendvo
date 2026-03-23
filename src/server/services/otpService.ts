@@ -3,6 +3,11 @@ import crypto from "crypto";
 import { db } from "@/lib/db";
 import { users, emailVerifications, gifts } from "@/lib/db/schema";
 import { eq, and, desc, lt, or } from "drizzle-orm";
+import {
+  logOTPEvent,
+  logGiftOTPEvent,
+  AuditEventType,
+} from "./auditService";
 
 export function generateOTP(): string {
   // CSPRNG compliant
@@ -47,7 +52,7 @@ export async function storeOTP(userId: string, otp: string) {
       ),
     );
 
-  console.log(`[AUDIT] OTP generated for user ${userId}`);
+  logOTPEvent(AuditEventType.OTP_GENERATED, userId);
 
   const [newVerification] = await db
     .insert(emailVerifications)
@@ -124,15 +129,79 @@ export async function verifyOTP(userId: string, otp: string) {
       .set({ attempts: newAttempts })
       .where(eq(emailVerifications.id, verification.id));
 
+    // Track cumulative failures for wide window lock
+    const now = new Date();
+    const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+
+    let cumulativeFailures = (user?.otpFailedAttempts || 0) + 1;
+    let windowStart = user?.otpAttemptsWindowStart;
+
+    // Reset window if it's been more than 1 hour
+    if (!windowStart || windowStart < oneHourAgo) {
+      cumulativeFailures = 1;
+      windowStart = now;
+    }
+
+    // Update cumulative failure tracking
+    await db
+      .update(users)
+      .set({
+        otpFailedAttempts: cumulativeFailures,
+        otpAttemptsWindowStart: windowStart,
+      })
+      .where(eq(users.id, userId));
+
+    logOTPEvent(AuditEventType.OTP_VERIFIED_FAILED, userId, {
+      attemptNumber: newAttempts,
+      cumulativeFailures,
+      remainingAttempts: 5 - newAttempts,
+    });
+
+    // Check for 10 attempts in 1 hour (wide window lock)
+    if (cumulativeFailures >= 10) {
+      const lockUntil = new Date(now.getTime() + 24 * 60 * 60 * 1000); // 24 hours
+      await db
+        .update(users)
+        .set({
+          lockUntil,
+          otpFailedAttempts: 0,
+          otpAttemptsWindowStart: null,
+        })
+        .where(eq(users.id, userId));
+
+      logOTPEvent(AuditEventType.ACCOUNT_LOCKED_10_ATTEMPTS, userId, {
+        lockDuration: "24 hours",
+        cumulativeFailures,
+        reason: "10 failed OTP attempts within 1 hour",
+      });
+
+      return {
+        success: false,
+        message:
+          "Account locked for 24 hours due to repeated failed attempts. Please contact support if you need assistance.",
+        locked: true,
+        shouldSendAlert: true,
+        lockDuration: "24 hours",
+      };
+    }
+
+    // Check for 5 attempts on current OTP (narrow window lock)
     if (newAttempts >= 5) {
-      const lockUntil = new Date(Date.now() + 30 * 60 * 1000);
+      const lockUntil = new Date(now.getTime() + 30 * 60 * 1000); // 30 minutes
       await db.update(users).set({ lockUntil }).where(eq(users.id, userId));
+
+      logOTPEvent(AuditEventType.ACCOUNT_LOCKED_5_ATTEMPTS, userId, {
+        lockDuration: "30 minutes",
+        attemptNumber: newAttempts,
+        reason: "5 failed attempts on current OTP",
+      });
 
       return {
         success: false,
         message: "Maximum attempts exceeded. Account locked for 30 minutes.",
         locked: true,
         shouldSendAlert: true,
+        lockDuration: "30 minutes",
       };
     }
 
@@ -155,8 +224,12 @@ export async function verifyOTP(userId: string, otp: string) {
       status: "active",
       lockUntil: null,
       loginAttempts: 0,
+      otpFailedAttempts: 0,
+      otpAttemptsWindowStart: null,
     })
     .where(eq(users.id, userId));
+
+  logOTPEvent(AuditEventType.OTP_VERIFIED_SUCCESS, userId);
 
   return { success: true, message: "Email verified successfully!" };
 }
@@ -212,6 +285,10 @@ export async function verifyGiftOTP(
   }
 
   if (gift.otpAttempts >= MAX_GIFT_OTP_ATTEMPTS) {
+    logGiftOTPEvent(AuditEventType.GIFT_OTP_LOCKED, gift.id, {
+      attempts: gift.otpAttempts,
+    });
+
     return {
       success: false,
       message: "Maximum attempts exceeded. This gift has been locked.",
@@ -229,12 +306,27 @@ export async function verifyGiftOTP(
   const isValid = await bcrypt.compare(otp, gift.otpHash);
 
   if (!isValid) {
+    const newAttempts = gift.otpAttempts + 1;
+
     await db
       .update(gifts)
-      .set({ otpAttempts: gift.otpAttempts + 1 })
+      .set({ otpAttempts: newAttempts })
       .where(eq(gifts.id, gift.id));
 
-    const remainingAttempts = MAX_GIFT_OTP_ATTEMPTS - (gift.otpAttempts + 1);
+    logGiftOTPEvent(AuditEventType.GIFT_OTP_FAILED, gift.id, {
+      attemptNumber: newAttempts,
+      remainingAttempts: MAX_GIFT_OTP_ATTEMPTS - newAttempts,
+    });
+
+    const remainingAttempts = MAX_GIFT_OTP_ATTEMPTS - newAttempts;
+
+    if (remainingAttempts <= 0) {
+      logGiftOTPEvent(AuditEventType.GIFT_OTP_LOCKED, gift.id, {
+        attempts: newAttempts,
+        reason: "Maximum attempts exceeded",
+      });
+    }
+
     return {
       success: false,
       message: `Invalid verification code. ${remainingAttempts} attempt${remainingAttempts !== 1 ? "s" : ""} remaining.`,

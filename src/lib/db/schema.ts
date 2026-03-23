@@ -41,6 +41,8 @@ export const users = pgTable("users", {
   status: userStatusEnum("status").default("unverified").notNull(),
   loginAttempts: integer("login_attempts").default(0).notNull(),
   lockUntil: timestamp("lock_until"),
+  otpFailedAttempts: integer("otp_failed_attempts").default(0).notNull(),
+  otpAttemptsWindowStart: timestamp("otp_attempts_window_start"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
   lastLogin: timestamp("last_login"),

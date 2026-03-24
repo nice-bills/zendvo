@@ -36,13 +36,6 @@ export function logAuditEvent(entry: AuditLogEntry): void {
 
   // Console logging for development
   console.log("[SECURITY_AUDIT]", JSON.stringify(logEntry));
-
-  // TODO: In production, send to dedicated audit logging system
-  // Examples:
-  // - Write to dedicated audit_logs table in database
-  // - Send to CloudWatch Logs
-  // - Send to external SIEM system
-  // - Write to secure audit file with rotation
 }
 
 /**

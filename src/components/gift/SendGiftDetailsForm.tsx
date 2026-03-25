@@ -144,16 +144,15 @@ export default function SendGiftDetailsForm({
         unlockTime: time,
       });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     date,
     hideAmount,
     message,
-    onChange,
     phoneNumber,
     rawAmount,
     recipient?.name,
     time,
-    value,
   ]);
 
   // 1. Mock Recipient Lookup Logic

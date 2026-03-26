@@ -60,3 +60,8 @@ export const validateE164PhoneNumber = (phone: string): boolean => {
   // E.164 format: + followed by 7-15 digits
   return /^\+[1-9]\d{6,14}$/.test(sanitized);
 };
+
+export const validateMessage = (message: string | null | undefined): boolean => {
+  if (!message) return true;
+  return message.length <= 500;
+};

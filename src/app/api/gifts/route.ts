@@ -6,6 +6,7 @@ import {
   validateAmount,
   validateCurrency,
   sanitizeInput,
+  validateMessage,
 } from "@/lib/validation";
 import { generateOTP, storeGiftOTP } from "@/server/services/otpService";
 import { sendGiftConfirmationOTP } from "@/server/services/emailService";
@@ -82,6 +83,14 @@ export async function POST(request: NextRequest) {
     // Sanitize optional fields
     const sanitizedMessage = message ? sanitizeInput(message) : null;
     const sanitizedTemplate = template ? sanitizeInput(template) : null;
+
+    // Validate message length
+    if (!validateMessage(sanitizedMessage)) {
+      return NextResponse.json(
+        { success: false, error: "Message cannot exceed 500 characters" },
+        { status: 400 },
+      );
+    }
 
     // Create gift record
     const [newGift] = await db
